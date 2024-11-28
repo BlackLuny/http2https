@@ -31,16 +31,6 @@ async fn main() -> Result<()> {
         return Err(anyhow!("Target URL must use HTTPS scheme"));
     }
 
-    // Create HTTPS client with rustls
-    let https = HttpsConnectorBuilder::new()
-        .with_webpki_roots()
-        .https_only()
-        .enable_http1()
-        .build();
-        
-    let client = Client::builder().build::<_, Body>(https);
-    let client = warp::any().map(move || client.clone());
-
     let target_filter = warp::any().map(move || target.clone());
 
     // Create the proxy route
@@ -48,14 +38,13 @@ async fn main() -> Result<()> {
         .and(warp::method())
         .and(warp::header::headers_cloned())
         .and(warp::body::bytes())
-        .and(client)
         .and(target_filter)
         .and_then(handle_request);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], args.port));
     info!("Starting proxy server on http://{}", addr);
     info!("Forwarding requests to {}", args.target);
-    info!("TLS implementation: rustls");
+    info!("TLS implementation: rustls (no connection pooling)");
 
     warp::serve(proxy).run(addr).await;
     Ok(())
@@ -66,11 +55,22 @@ async fn handle_request(
     method: http::Method,
     headers: http::HeaderMap,
     body: bytes::Bytes,
-    client: Client<hyper_rustls::HttpsConnector<hyper::client::HttpConnector>>,
     target: Uri,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     let start_time = Instant::now();
     let path_and_query = path.as_str();
+    
+    // Create a new HTTPS client for each request
+    let https = HttpsConnectorBuilder::new()
+        .with_webpki_roots()
+        .https_only()
+        .enable_http1()
+        .build();
+
+    let client = Client::builder()
+        .pool_idle_timeout(std::time::Duration::from_secs(0)) // Disable idle pooling
+        .pool_max_idle_per_host(0) // Disable connection pooling
+        .build::<_, Body>(https);
     
     // Construct the target URI, properly handling the path
     let target_path = target.path().trim_end_matches('/');
@@ -128,6 +128,9 @@ async fn handle_request(
         if let Some(client_ip) = headers.get("x-real-ip").or(headers.get("x-forwarded-for")) {
             headers_mut.insert("x-forwarded-for", client_ip.clone());
         }
+        
+        // Force close connection
+        headers_mut.insert("connection", "close".parse().unwrap());
     }
 
     // Create the request with the body
