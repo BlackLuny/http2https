@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use warp::{Filter, http};
 use hyper::{Body, Client, Request, Uri};
-use hyper_tls::HttpsConnector;
+use hyper_rustls::HttpsConnectorBuilder;
 use clap::Parser;
 use anyhow::{Result, anyhow};
 use log::{info, error};
@@ -30,7 +30,13 @@ async fn main() -> Result<()> {
         return Err(anyhow!("Target URL must use HTTPS scheme"));
     }
 
-    let https = HttpsConnector::new();
+    // Create HTTPS client with rustls
+    let https = HttpsConnectorBuilder::new()
+        .with_webpki_roots()
+        .https_only()
+        .enable_http1()
+        .build();
+        
     let client = Client::builder().build::<_, Body>(https);
     let client = warp::any().map(move || client.clone());
 
@@ -58,7 +64,7 @@ async fn handle_request(
     method: http::Method,
     headers: http::HeaderMap,
     body: bytes::Bytes,
-    client: Client<HttpsConnector<hyper::client::HttpConnector>>,
+    client: Client<hyper_rustls::HttpsConnector<hyper::client::HttpConnector>>,
     target: Uri,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     let path_and_query = path.as_str().to_string();

@@ -10,7 +10,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  OPENSSL_STATIC: true
 
 jobs:
   create-release:
@@ -87,55 +86,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.platform.target }}
-
-      - name: Install dependencies (Ubuntu)
-        if: matrix.platform.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libssl-dev musl-tools gcc-aarch64-linux-gnu
-
-      - name: Install OpenSSL for Linux targets
-        if: matrix.platform.os == 'ubuntu-latest'
-        run: |
-          OPENSSL_VERSION=3.1.4
-          
-          # Download and extract OpenSSL
-          wget https://www.openssl.org/source/openssl-${OPENSSL_VERSION}.tar.gz
-          tar xzf openssl-${OPENSSL_VERSION}.tar.gz
-          cd openssl-${OPENSSL_VERSION}
-          
-          # Function to build OpenSSL for a specific target
-          build_openssl() {
-            local TARGET=$1
-            local PREFIX=$2
-            local CONFIG=$3
-            local CC=$4
-            
-            echo "Building OpenSSL for $TARGET"
-            make clean || true
-            CC="$CC" ./Configure $CONFIG no-shared no-zlib -fPIC --prefix=$PREFIX --openssldir=$PREFIX
-            make -j$(nproc)
-            sudo make install_sw
-          }
-          
-          case "${{ matrix.platform.target }}" in
-            "x86_64-unknown-linux-gnu")
-              build_openssl "x86_64-linux-gnu" "/usr/local/ssl-gnu" "linux-x86_64" "gcc"
-              echo "OPENSSL_DIR=/usr/local/ssl-gnu" >> $GITHUB_ENV
-              ;;
-            "x86_64-unknown-linux-musl")
-              build_openssl "x86_64-linux-musl" "/usr/local/ssl-musl" "linux-x86_64" "musl-gcc -static"
-              echo "OPENSSL_DIR=/usr/local/ssl-musl" >> $GITHUB_ENV
-              ;;
-            "aarch64-unknown-linux-gnu")
-              build_openssl "aarch64-linux-gnu" "/usr/local/ssl-aarch64-gnu" "linux-aarch64" "aarch64-linux-gnu-gcc"
-              echo "OPENSSL_DIR=/usr/local/ssl-aarch64-gnu" >> $GITHUB_ENV
-              ;;
-            "aarch64-unknown-linux-musl")
-              build_openssl "aarch64-linux-musl" "/usr/local/ssl-aarch64-musl" "linux-aarch64" "musl-gcc -static"
-              echo "OPENSSL_DIR=/usr/local/ssl-aarch64-musl" >> $GITHUB_ENV
-              ;;
-          esac
 
       - name: Install cross
         if: matrix.platform.cross

@@ -5,9 +5,9 @@ edition = "2021"
 
 [dependencies]
 tokio = { version = "1.28", features = ["full"] }
-warp = "0.3"
+warp = { version = "0.3", features = ["tls"] }
 hyper = { version = "0.14", features = ["full"] }
-hyper-tls = "0.5"
+hyper-rustls = { version = "0.24", features = ["webpki-roots"] }
 futures = "0.3"
 log = "0.4"
 env_logger = "0.10"
