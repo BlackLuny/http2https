@@ -70,13 +70,17 @@ async fn handle_request(
     target: Uri,
 ) -> Result<impl warp::Reply, warp::Rejection> {
     let start_time = Instant::now();
-    let path_and_query = path.as_str().to_string();
+    let path_and_query = path.as_str();
     
-    // Construct the target URI
+    // Construct the target URI, properly handling the path
+    let target_path = target.path().trim_end_matches('/');
+    let request_path = path_and_query.trim_start_matches('/');
+    
     let uri = format!(
-        "{}{}{}",
+        "{}{}{}{}",
         target,
-        path_and_query,
+        if target_path.is_empty() { "" } else { "/" },
+        request_path,
         if let Some(q) = target.query() {
             format!("?{}", q)
         } else {
@@ -84,7 +88,10 @@ async fn handle_request(
         }
     );
 
-    let uri: Uri = uri.parse().map_err(|_| warp::reject::not_found())?;
+    let uri: Uri = uri.parse().map_err(|e| {
+        error!("Failed to parse target URI: {}", e);
+        warp::reject::not_found()
+    })?;
 
     info!("Incoming request: {} {} -> {}", method, path_and_query, uri);
     debug!("Request headers: {:?}", headers);
@@ -100,13 +107,36 @@ async fn handle_request(
 
     // Copy headers
     if let Some(headers_mut) = proxy_req.headers_mut() {
-        *headers_mut = headers.clone();
+        // Copy original headers except those we want to modify
+        for (key, value) in headers.iter() {
+            if key != "host" && key != "connection" {
+                headers_mut.insert(key, value.clone());
+            }
+        }
+        
+        // Set the correct Host header
+        if let Some(host) = uri.host() {
+            if let Some(port) = uri.port_u16() {
+                headers_mut.insert("host", format!("{}:{}", host, port).parse().unwrap());
+            } else {
+                headers_mut.insert("host", host.parse().unwrap());
+            }
+        }
+
+        // Add proxy-related headers
+        headers_mut.insert("x-forwarded-proto", "http".parse().unwrap());
+        if let Some(client_ip) = headers.get("x-real-ip").or(headers.get("x-forwarded-for")) {
+            headers_mut.insert("x-forwarded-for", client_ip.clone());
+        }
     }
 
     // Create the request with the body
     let proxy_req = proxy_req
         .body(Body::from(body))
-        .map_err(|_| warp::reject::not_found())?;
+        .map_err(|e| {
+            error!("Failed to create proxy request: {}", e);
+            warp::reject::not_found()
+        })?;
 
     // Send the request
     match client.request(proxy_req).await {
