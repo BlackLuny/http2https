@@ -1,10 +1,11 @@
 use std::net::SocketAddr;
+use std::time::Instant;
 use warp::{Filter, http};
-use hyper::{Body, Client, Request, Uri};
+use hyper::{Body, Client, Request, Uri, StatusCode};
 use hyper_rustls::HttpsConnectorBuilder;
 use clap::Parser;
 use anyhow::{Result, anyhow};
-use log::{info, error};
+use log::{info, error, debug};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -54,6 +55,7 @@ async fn main() -> Result<()> {
     let addr = SocketAddr::from(([127, 0, 0, 1], args.port));
     info!("Starting proxy server on http://{}", addr);
     info!("Forwarding requests to {}", args.target);
+    info!("TLS implementation: rustls");
 
     warp::serve(proxy).run(addr).await;
     Ok(())
@@ -67,6 +69,7 @@ async fn handle_request(
     client: Client<hyper_rustls::HttpsConnector<hyper::client::HttpConnector>>,
     target: Uri,
 ) -> Result<impl warp::Reply, warp::Rejection> {
+    let start_time = Instant::now();
     let path_and_query = path.as_str().to_string();
     
     // Construct the target URI
@@ -83,10 +86,17 @@ async fn handle_request(
 
     let uri: Uri = uri.parse().map_err(|_| warp::reject::not_found())?;
 
+    info!("Incoming request: {} {} -> {}", method, path_and_query, uri);
+    debug!("Request headers: {:?}", headers);
+    
+    if !body.is_empty() {
+        debug!("Request body size: {} bytes", body.len());
+    }
+
     // Build the proxied request
     let mut proxy_req = Request::builder()
-        .method(method)
-        .uri(uri);
+        .method(method.clone())
+        .uri(uri.clone());
 
     // Copy headers
     if let Some(headers_mut) = proxy_req.headers_mut() {
@@ -100,9 +110,25 @@ async fn handle_request(
 
     // Send the request
     match client.request(proxy_req).await {
-        Ok(res) => Ok(res),
+        Ok(res) => {
+            let status = res.status();
+            let elapsed = start_time.elapsed();
+            
+            if status.is_success() {
+                info!("Request successful: {} {} -> {} ({}ms)", 
+                    method, path_and_query, status, elapsed.as_millis());
+            } else {
+                error!("Request failed: {} {} -> {} ({}ms)", 
+                    method, path_and_query, status, elapsed.as_millis());
+            }
+
+            debug!("Response headers: {:?}", res.headers());
+            Ok(res)
+        }
         Err(e) => {
-            error!("Proxy request failed: {}", e);
+            let elapsed = start_time.elapsed();
+            error!("Request error: {} {} -> {} ({}ms)", 
+                method, path_and_query, e, elapsed.as_millis());
             Err(warp::reject::not_found())
         }
     }
